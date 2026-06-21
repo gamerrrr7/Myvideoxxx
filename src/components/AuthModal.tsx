@@ -25,6 +25,11 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
   const [profilePic, setProfilePic] = useState<string>('');
   const [showPassword, setShowPassword] = useState(false);
   
+  // Email verification state
+  const [verificationStep, setVerificationStep] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState('');
+  const [enteredCode, setEnteredCode] = useState('');
+  
   // Status states
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,8 +44,8 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      if (file.size > 5 * 1024 * 1024) {
-        setError('A imagem do perfil deve ter menos de 5MB.');
+      if (file.size > 15 * 1024 * 1024) { // Increased to support high resolutions
+        setError('A imagem do perfil deve ter menos de 15MB.');
         return;
       }
       
@@ -89,32 +94,12 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
           throw new Error('Este nome de usuário já está em uso.');
         }
 
-        // Criar usuário real no banco local
-        const newUser: User & { passwordHash: string } = {
-          id: 'user_' + Date.now(),
-          username: cleanedUsername,
-          email: cleanedEmail,
-          passwordHash: password, // Armazenado localmente de forma simples para simulação
-          bio: bio.trim(),
-          profilePic: profilePic || undefined,
-          createdAt: Date.now()
-        };
-
-        await saveUserToDB(newUser);
-        
-        // Sucesso
-        setSuccess('Cadastro realizado com sucesso!');
-        setTimeout(() => {
-          onSuccess({
-            id: newUser.id,
-            username: newUser.username,
-            email: newUser.email,
-            bio: newUser.bio,
-            profilePic: newUser.profilePic,
-            createdAt: newUser.createdAt
-          });
-          onClose();
-        }, 1200);
+        // Gerar código de verificação para o e-mail
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        setGeneratedCode(code);
+        setVerificationStep(true);
+        setSuccess('Código de verificação enviado! Verifique as orientações abaixo.');
+        setLoading(false);
 
       } else if (tab === 'login') {
         const cleanedEmail = email.trim().toLowerCase();
@@ -127,6 +112,11 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
           throw new Error('Credenciais incorretas. Verifique seu e-mail e sua senha.');
         }
 
+        // Verificar se conta está suspensa
+        if (user.isBlocked) {
+          throw new Error('Sua conta foi suspensa temporária ou definitivamente por violar as regras de uso do MyVideoXXX (spam ou conteúdo impróprio).');
+        }
+
         setSuccess('Bem-vindo de volta!');
         setTimeout(() => {
           onSuccess({
@@ -135,13 +125,64 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
             email: user.email,
             bio: user.bio,
             profilePic: user.profilePic,
-            createdAt: user.createdAt
+            createdAt: user.createdAt,
+            emailVerified: user.emailVerified,
+            isBlocked: user.isBlocked
           });
           onClose();
         }, 800);
       }
     } catch (err: any) {
       setError(err.message || 'Ocorreu um erro no processamento.');
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setLoading(true);
+
+    try {
+      if (enteredCode.trim() !== generatedCode) {
+        throw new Error('Código de verificação incorreto. Digite o código exibido abaixo.');
+      }
+
+      const cleanedUsername = username.trim();
+      const cleanedEmail = email.trim().toLowerCase();
+
+      // Criar usuário real verificado no banco local
+      const newUser: User & { passwordHash: string } = {
+        id: 'user_' + Date.now(),
+        username: cleanedUsername,
+        email: cleanedEmail,
+        passwordHash: password,
+        bio: bio.trim(),
+        profilePic: profilePic || undefined,
+        createdAt: Date.now(),
+        emailVerified: true,
+        isBlocked: false
+      };
+
+      await saveUserToDB(newUser);
+      
+      setSuccess('E-mail verificado e conta registrada com sucesso!');
+      setTimeout(() => {
+        onSuccess({
+          id: newUser.id,
+          username: newUser.username,
+          email: newUser.email,
+          bio: newUser.bio,
+          profilePic: newUser.profilePic,
+          createdAt: newUser.createdAt,
+          emailVerified: true
+        });
+        onClose();
+      }, 1200);
+
+    } catch (err: any) {
+      setError(err.message || 'Erro ao realizar verificação de e-mail.');
     } finally {
       setLoading(false);
     }
@@ -219,7 +260,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
         </div>
 
         {/* Abas */}
-        {tab !== 'recover' && (
+        {tab !== 'recover' && !verificationStep && (
           <div className="flex border-b border-zinc-800">
             <button
               onClick={() => { setTab('login'); setError(null); setSuccess(null); }}
@@ -254,7 +295,64 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
             </div>
           )}
 
-          {tab !== 'recover' ? (
+          {verificationStep ? (
+            <form onSubmit={handleVerifyEmailSubmit} className="space-y-4" id="verify_email_form">
+              <div className="text-center space-y-2 mb-4">
+                <h4 className="text-white font-bold text-base">Verificação de E-mail</h4>
+                <p className="text-xs text-zinc-455">
+                  Um código de confirmação foi disparado para o e-mail <strong className="text-rose-400">{email}</strong>.
+                </p>
+              </div>
+              
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Código de Verificação de 6 Dígitos</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={6}
+                  placeholder="------"
+                  value={enteredCode}
+                  onChange={(e) => setEnteredCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-zinc-955 border border-zinc-800 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl py-3 text-center text-xl tracking-[0.5em] font-mono font-bold text-white outline-none transition-all placeholder:text-zinc-800"
+                  id="verify_email_code_input"
+                />
+              </div>
+
+              <div className="p-3.5 bg-zinc-950 border border-zinc-800/80 rounded-xl space-y-2 mt-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping" />
+                  <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">SMS / Email Mock Box</span>
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-normal">
+                  Insira este código exibido sob simulação real do MyVideoXXX:
+                </p>
+                <span className="font-mono text-rose-505 font-extrabold bg-rose-950/25 border border-rose-900/30 px-3 py-1 rounded text-sm select-all inline-block tracking-widest leading-none mt-1">
+                  {generatedCode}
+                </span>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white rounded-xl py-2.5 text-sm font-bold tracking-wide active:scale-[0.98] transition-all flex items-center justify-center disabled:opacity-50 mt-2 shadow-lg shadow-rose-950/20"
+                id="verify_email_submit_btn"
+              >
+                {loading ? 'Verificando...' : 'Confirmar e Criar Conta'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setVerificationStep(false);
+                  setError(null);
+                  setSuccess(null);
+                }}
+                className="w-full text-zinc-500 hover:text-zinc-300 text-xs font-semibold py-1 transition-all mt-1"
+              >
+                Voltar e alterar e-mail
+              </button>
+            </form>
+          ) : tab !== 'recover' ? (
             <form onSubmit={handleAuthSubmit} className="space-y-4" id="auth_form">
               {tab === 'signup' && (
                 <>

@@ -10,6 +10,8 @@ export interface User {
   bio?: string;
   profilePic?: string; // base64 string or blob URL
   createdAt: number;
+  emailVerified?: boolean;
+  isBlocked?: boolean;
 }
 
 export interface Comment {
@@ -27,11 +29,13 @@ export interface Post {
   username: string;
   userProfilePic?: string;
   type: 'video' | 'image';
-  mediaData: string; // base64 string (works great for IndexedDB storage)
+  mediaData: string; // base64 representation of data OR object URL (as retrieved/joined)
   caption: string;
   createdAt: number;
   likes: string[]; // array of userIds
   comments: Comment[];
+  reports?: { id: string; userId: string; reason: string; createdAt: number }[];
+  isFlaggedSpam?: boolean;
 }
 
 const DB_NAME = 'MyVideoXXX_DB';
@@ -249,3 +253,71 @@ export async function updateAllPostsUserMetadataInDB(userId: string, username: s
     request.onerror = () => reject(new Error('Erro ao atualizar dados nas publicações.'));
   });
 }
+
+export async function reportPostInDB(postId: string, userId: string, reason: string): Promise<Post> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('posts', 'readwrite');
+    const store = tx.objectStore('posts');
+    const getRequest = store.get(postId);
+
+    getRequest.onsuccess = () => {
+      const post = getRequest.result as Post;
+      if (!post) {
+        reject(new Error('Publicação não encontrada.'));
+        return;
+      }
+      
+      if (!post.reports) {
+        post.reports = [];
+      }
+      
+      // Check if user already reported
+      const alreadyReported = post.reports.some(r => r.userId === userId);
+      if (!alreadyReported) {
+        post.reports.push({
+          id: 'report_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+          userId,
+          reason,
+          createdAt: Date.now()
+        });
+      }
+
+      // Spam limit threshold auto-flagging
+      if (post.reports.length >= 3) {
+        post.isFlaggedSpam = true;
+      }
+
+      const putRequest = store.put(post);
+      putRequest.onsuccess = () => resolve(post);
+      putRequest.onerror = () => reject(new Error('Erro ao registrar denúncia.'));
+    };
+    
+    getRequest.onerror = () => reject(new Error('Erro ao obter publicação para denúncia.'));
+  });
+}
+
+export async function toggleUserBlockInDB(userId: string, shouldBlock: boolean): Promise<void> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('users', 'readwrite');
+    const store = tx.objectStore('users');
+    const getRequest = store.get(userId);
+
+    getRequest.onsuccess = () => {
+      const user = getRequest.result;
+      if (!user) {
+        reject(new Error('Usuário não localizado.'));
+        return;
+      }
+
+      user.isBlocked = shouldBlock;
+      const putRequest = store.put(user);
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(new Error('Erro ao salvar estado de suspensão.'));
+    };
+
+    getRequest.onerror = () => reject(new Error('Erro ao carregar usuário para suspensão.'));
+  });
+}
+
