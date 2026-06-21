@@ -1,0 +1,6 @@
+{
+  "name": "MyVideoXXX",
+  "description": "Uma plataforma de rede social moderna para compartilhamento de fotos e vídeos rápidos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
