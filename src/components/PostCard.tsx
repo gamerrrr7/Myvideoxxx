@@ -5,7 +5,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Heart, MessageCircle, Share2, Play, Pause, VolumeX, Volume2, Send, Trash2, Check, Maximize2, Download, Edit, AlertTriangle, Flag, X } from 'lucide-react';
-import { Post, User, updatePostInDB, deletePostFromDB, reportPostInDB } from '../db';
+import { Post, User, updatePostInDB, deletePostFromDB, reportPostInDB, createNotificationInDB } from '../db';
 
 interface PostCardProps {
   key?: string;
@@ -14,9 +14,11 @@ interface PostCardProps {
   onPostUpdate: () => void;
   onRequestAuth: () => void;
   onSelectMedia?: (post: Post) => void;
+  onSelectTag?: (tag: string) => void;
+  onSelectUser?: (userId: string) => void;
 }
 
-export default function PostCard({ post, currentUser, onPostUpdate, onRequestAuth, onSelectMedia }: PostCardProps) {
+export default function PostCard({ post, currentUser, onPostUpdate, onRequestAuth, onSelectMedia, onSelectTag, onSelectUser }: PostCardProps) {
   const [isLiked, setIsLiked] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [commentText, setCommentText] = useState('');
@@ -54,7 +56,8 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
 
     try {
       let updatedLikes = [...post.likes];
-      if (isLiked) {
+      const hadLiked = isLiked;
+      if (hadLiked) {
         // Descurtir
         updatedLikes = updatedLikes.filter(id => id !== currentUser.id);
       } else {
@@ -68,6 +71,19 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
       };
 
       await updatePostInDB(updatedPost);
+
+      // Enviar notificação se está curtindo e não é o próprio autor do post
+      if (!hadLiked && post.userId !== currentUser.id) {
+        await createNotificationInDB({
+          userId: post.userId,
+          type: 'like',
+          senderId: currentUser.id,
+          senderName: currentUser.username,
+          senderProfilePic: currentUser.profilePic,
+          postId: post.id
+        });
+      }
+
       onPostUpdate();
     } catch (err) {
       console.error('Erro ao curtir post: ', err);
@@ -84,8 +100,9 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
     if (!commentText.trim()) return;
 
     try {
+      const commentId = 'comment_' + Date.now();
       const newComment = {
-        id: 'comment_' + Date.now(),
+        id: commentId,
         userId: currentUser.id,
         username: currentUser.username,
         userProfilePic: currentUser.profilePic,
@@ -99,6 +116,36 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
       };
 
       await updatePostInDB(updatedPost);
+
+      // Notificar dono da publicação
+      if (post.userId !== currentUser.id) {
+        await createNotificationInDB({
+          userId: post.userId,
+          type: 'comment',
+          senderId: currentUser.id,
+          senderName: currentUser.username,
+          senderProfilePic: currentUser.profilePic,
+          postId: post.id,
+          commentId: commentId
+        });
+      }
+
+      // Notificar outros comentadores (Respostas / Conversas paralela do post)
+      const otherCommenters = Array.from(new Set(post.comments.map(c => c.userId)))
+        .filter(id => id !== currentUser.id && id !== post.userId);
+      
+      for (const commenterId of otherCommenters) {
+        await createNotificationInDB({
+          userId: commenterId,
+          type: 'reply',
+          senderId: currentUser.id,
+          senderName: currentUser.username,
+          senderProfilePic: currentUser.profilePic,
+          postId: post.id,
+          commentId: commentId
+        });
+      }
+
       setCommentText('');
       onPostUpdate();
     } catch (err) {
@@ -184,9 +231,13 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
     if (!editedCaption.trim()) return;
 
     try {
+      const matches = editedCaption.match(/#([a-zA-Z0-9_À-ÿ]+)/g);
+      const tags = matches ? matches.map(t => t.toLowerCase()) : [];
+      
       const updated: Post = {
         ...post,
-        caption: editedCaption.trim()
+        caption: editedCaption.trim(),
+        tags
       };
       await updatePostInDB(updated);
       setIsEditing(false);
@@ -253,13 +304,40 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
     );
   }
 
+  const renderCaptionWithTags = (captionText: string) => {
+    if (!captionText) return null;
+    const parts = captionText.split(/(\s+)/);
+    return parts.map((part, index) => {
+      if (part.startsWith('#')) {
+        return (
+          <span
+            key={index}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onSelectTag) {
+                onSelectTag(part);
+              }
+            }}
+            className="text-rose-500 hover:text-rose-400 hover:underline cursor-pointer font-bold inline-block mx-0.5 transition-colors animate-pulse-subtle"
+          >
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
+  };
+
   return (
     <article className="glass-panel rounded-2xl overflow-hidden shadow-2xl flex flex-col w-full max-w-xl mx-auto relative hover:-translate-y-0.5 transition-transform duration-200" id={`post_card_${post.id}`}>
       
       {/* Cabeçalho do Card */}
       <div className="p-4 flex items-center justify-between border-b border-zinc-800/40">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full border border-zinc-800 bg-[#09090b] flex items-center justify-center overflow-hidden shrink-0">
+          <div 
+            onClick={() => onSelectUser && onSelectUser(post.userId)}
+            className="w-10 h-10 rounded-full border border-zinc-800 bg-[#09090b] flex items-center justify-center overflow-hidden shrink-0 cursor-pointer hover:border-zinc-500 transition-all"
+          >
             {post.userProfilePic ? (
               <img src={post.userProfilePic} alt={post.username} className="w-full h-full object-cover" />
             ) : (
@@ -268,7 +346,7 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
               </div>
             )}
           </div>
-          <div className="flex flex-col">
+          <div className="flex flex-col cursor-pointer" onClick={() => onSelectUser && onSelectUser(post.userId)}>
             <span className="font-bold text-white text-xs hover:underline cursor-pointer transition-colors">
               @{post.username}
             </span>
@@ -471,9 +549,9 @@ export default function PostCard({ post, currentUser, onPostUpdate, onRequestAut
           </form>
         ) : (
           post.caption && (
-            <div className="text-xs text-zinc-200 font-medium leading-relaxed">
-              <span className="font-bold text-white mr-1.5">@{post.username}</span>
-              {post.caption}
+            <div className="text-xs text-zinc-250 font-medium leading-relaxed">
+              <span className="font-bold text-white mr-1.5 cursor-pointer hover:underline" onClick={() => onSelectUser && onSelectUser(post.userId)}>@{post.username}</span>
+              {renderCaptionWithTags(post.caption)}
             </div>
           )
         )}

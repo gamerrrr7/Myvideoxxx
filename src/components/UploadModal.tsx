@@ -303,6 +303,9 @@ export default function UploadModal({ isOpen, onClose, currentUser, onUploadSucc
         mediaOutput = URL.createObjectURL(file);
       }
 
+      const matches = caption.match(/#([a-zA-Z0-9_À-ÿ]+)/g);
+      const tags = matches ? matches.map(t => t.toLowerCase()) : [];
+
       const newPost: Post = {
         id: 'post_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
         userId: currentUser.id,
@@ -314,7 +317,8 @@ export default function UploadModal({ isOpen, onClose, currentUser, onUploadSucc
         createdAt: Date.now(),
         likes: [],
         comments: [],
-        reports: []
+        reports: [],
+        tags
       };
 
       // Se temos miniatura de vídeo, podemos salvar nela ou armazenar o Blob na chave original do post
